@@ -377,6 +377,17 @@ export const AudioAnalysisPage: React.FC = () => {
       {/* Forensic Results Section */}
       {analysisResult && (
         <div className="rounded-2xl border border-slate-800/80 bg-slate-900/40 p-6 backdrop-blur-sm space-y-6">
+          {/* SIMULATED vs REAL banner — GOAL step 4 */}
+          {analysisResult.is_demo ? (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-300">
+              SIMULATED RESULT — heuristic demo, not AASIST. Set VITE_ENABLE_DEMO_MODE=false for real inference.
+            </div>
+          ) : (
+            <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300 flex items-center justify-between">
+              <span>REAL RESULT — {analysisResult.model_version} • CPU • {analysisResult.processing_time_ms ? `${analysisResult.processing_time_ms} ms` : ""} {analysisResult.num_windows ? `• ${analysisResult.num_windows} window(s)` : ""}</span>
+              <span className="text-[11px] text-emerald-400/70">{analysisResult.spoof_probability_max ? `max window ${analysisResult.spoof_probability_max}%` : ""}</span>
+            </div>
+          )}
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-slate-800/80 pb-4">
             <div>
               <span className="text-xs text-blue-400 font-medium uppercase tracking-wider">

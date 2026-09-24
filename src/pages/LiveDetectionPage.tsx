@@ -244,7 +244,7 @@ export const LiveDetectionPage: React.FC = () => {
             </span>
           </div>
           <p className="mt-1 text-xs text-slate-400">
-            Real-time sliding window analysis with acoustic vocoder artifact detection and enrolled identity matching.
+            Real-time sliding window — <span className="text-amber-400 font-semibold">SIMULATED</span> scores (WebSocket produces heuristic demo data, not AASIST). Use the Upload page for real AASIST inference.
           </p>
         </div>
 
