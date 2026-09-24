@@ -72,6 +72,9 @@ export interface AudioAnalysis {
   created_at: string;
   completed_at?: string;
   is_demo: boolean;
+  processing_time_ms?: number;
+  num_windows?: number;
+  spoof_probability_max?: number;
 }
 
 export interface DetectionEvent {

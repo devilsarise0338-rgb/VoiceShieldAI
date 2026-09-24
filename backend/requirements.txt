@@ -1,8 +1,21 @@
-fastapi>=0.110.0
-uvicorn[standard]>=0.28.0
-python-multipart>=0.0.9
-pydantic>=2.6.0
-python-dotenv>=1.0.1
-requests>=2.31.0
-websockets>=12.0
-aiofiles>=23.2.1
+# VoiceShield AI — pinned backend (CPU-only, i3 2-core)
+# Install CPU torch separately on Windows PowerShell:
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# Then: pip install -r backend/requirements.txt
+fastapi==0.141.1
+uvicorn[standard]==0.53.0
+python-multipart==0.0.32
+pydantic==2.13.5
+pydantic_core==2.46.5
+python-dotenv==1.2.3
+requests==2.34.2
+websockets==17.1
+aiofiles==25.1.0
+# Audio / inference
+soundfile==0.14.0
+numpy==2.4.4
+# torch/torchaudio CPU are not pinned here because they need --index-url; install via:
+#   pip install torch==2.14.0+cpu torchaudio==2.11.0+cpu --index-url https://download.pytorch.org/whl/cpu
+# For exact reproducibility on this host: torch==2.14.0+cpu, torchaudio==2.11.0+cpu
+# Optional: ffmpeg for mp3/m4a on Windows
+#   winget install Gyan.FFmpeg  (verify: ffmpeg -version)

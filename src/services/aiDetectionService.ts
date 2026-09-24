@@ -20,7 +20,8 @@ export class AIDetectionService {
 
   constructor() {
     this.backendUrl = import.meta.env.VITE_AI_BACKEND_URL || 'http://localhost:8000';
-    this.isDemoMode = import.meta.env.VITE_ENABLE_DEMO_MODE !== 'false';
+    // Demo OFF unless explicitly "true" (GOAL step 4: default OFF, protects real path)
+    this.isDemoMode = import.meta.env.VITE_ENABLE_DEMO_MODE === 'true';
   }
 
   public setDemoMode(enabled: boolean) {
@@ -56,8 +57,8 @@ export class AIDetectionService {
   }
 
   async submitAudioAnalysis(req: AnalysisRequest, isSuspiciousSimulated = false): Promise<AudioAnalysis> {
-    // If backend is active and demo mode is disabled, call the real FastAPI endpoint
-    if (!this.isDemoMode && this.backendUrl && !this.backendUrl.includes('localhost:8000')) {
+    // Real path: when demo OFF, always try the FastAPI endpoint (including localhost:8000 for local dev)
+    if (!this.isDemoMode && this.backendUrl) {
       try {
         const formData = new FormData();
         if (req.audioBlob) {
@@ -75,13 +76,25 @@ export class AIDetectionService {
 
         if (res.ok) {
           const data = await res.json();
+          // Backend is now REAL (AASIST) — is_demo must be false; respect server value
           return {
             ...data,
-            is_demo: false,
+            is_demo: data.is_demo ?? false,
           };
+        } else {
+          // Surface real backend error instead of silently falling back, so operator knows it's not simulated
+          const txt = await res.text().catch(() => res.statusText);
+          console.warn(`Backend ${res.status} — not falling back to simulation: ${txt}`);
+          // Only fall back if server explicitly unavailable (network), not on 4xx/5xx with body
+          if (res.status >= 500) throw new Error(`Backend ${res.status}: ${txt}`);
+          // For 400/413/415, throw to let UI show the error (don't fake a result)
+          throw new Error(txt || `Backend ${res.status}`);
         }
-      } catch (err) {
-        console.warn('Backend call failed, falling back to simulated analysis adapter.', err);
+      } catch (err: any) {
+        // Network failure: propagate so caller can show error, not a silent fake
+        if (err?.message?.startsWith('Backend ')) throw err;
+        console.warn('Backend call failed (network).', err);
+        throw err;
       }
     }
 
