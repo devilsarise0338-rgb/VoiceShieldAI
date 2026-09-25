@@ -28,9 +28,22 @@ export const SettingsPage: React.FC = () => {
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    try {
+      const restUrl = new URL(apiUrl.trim());
+      if (!['http:', 'https:'].includes(restUrl.protocol)) {
+        throw new Error('REST URL must start with http:// or https://.');
+      }
+      const socketUrl = new URL(wsUrl.trim());
+      if (!['ws:', 'wss:'].includes(socketUrl.protocol)) {
+        throw new Error('WebSocket URL must start with ws:// or wss://.');
+      }
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Enter valid backend URLs.');
+      return;
+    }
     updateBackendConfig({
       demoMode,
-      selectedModel,
+      selectedModel: 'AASIST / ASVspoof2019-LA',
       spoofThreshold,
       speakerSimilarityThreshold: similarityThreshold,
       aiBackendRestUrl: apiUrl,
@@ -96,12 +109,10 @@ export const SettingsPage: React.FC = () => {
                 onChange={(e) => setSelectedModel(e.target.value)}
                 className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-white focus:border-blue-500 focus:outline-none"
               >
-                <option value="RawNet3-v2.4">RawNet3-v2.4 (High Throughput / Streaming)</option>
-                <option value="WavLM-AntiSpoof-Large">WavLM-AntiSpoof-Large (Self-Supervised SOTA)</option>
-                <option value="CQCC-LFCC-Ensemble">CQCC-LFCC Ensemble (Cepstral Micro-Phase)</option>
+                <option value="AASIST / ASVspoof2019-LA">AASIST / ASVspoof2019-LA (CPU)</option>
               </select>
               <p className="mt-1 text-xs text-slate-400">
-                Optimized for sub-300ms sliding frame classification.
+                Real uploaded-audio anti-spoofing. Long clips are windowed on CPU.
               </p>
             </div>
 
@@ -112,7 +123,7 @@ export const SettingsPage: React.FC = () => {
               <div className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-950 p-2.5">
                 <div>
                   <span className="text-xs text-slate-200 block font-medium">Demo Simulation Mode</span>
-                  <span className="text-[11px] text-slate-400">Generates realistic DSP telemetry for evaluation</span>
+                  <span className="text-[11px] text-slate-400">When enabled, upload results are explicitly marked SIMULATED</span>
                 </div>
                 <input
                   type="checkbox"
@@ -133,7 +144,7 @@ export const SettingsPage: React.FC = () => {
                 type="text"
                 value={apiUrl}
                 onChange={(e) => setApiUrl(e.target.value)}
-                placeholder="http://localhost:8000/api/v1/detect"
+                placeholder="http://localhost:8000"
                 className="w-full rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-white font-mono placeholder-slate-600 focus:border-blue-500 focus:outline-none"
               />
             </div>
@@ -197,7 +208,7 @@ export const SettingsPage: React.FC = () => {
                 className="w-full accent-blue-500"
               />
               <p className="text-xs text-slate-400">
-                Minimum acoustic cosine similarity required to confirm enrolled speaker identity.
+                Reserved for a future speaker-verification model; AASIST does not calculate speaker similarity.
               </p>
             </div>
           </div>
@@ -216,16 +227,16 @@ export const SettingsPage: React.FC = () => {
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Supabase Connection:</span>
               <span className={isSupabaseConnected ? 'text-emerald-400 font-medium' : 'text-amber-400 font-medium'}>
-                {isSupabaseConnected ? 'Connected & Synced' : 'Demo Persistence Mode'}
+                {isSupabaseConnected ? 'Configured (not a connectivity test)' : 'Local Persistence Mode'}
               </span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Row Level Security (RLS):</span>
-              <span className="text-emerald-400 font-medium">Enforced (Per-User Isolation)</span>
+              <span className="text-slate-300 font-medium">Defined in Supabase schema (not live-verified here)</span>
             </div>
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Storage Buckets:</span>
-              <span className="text-slate-300 font-mono text-[11px]">voice-reference-audio, analysis-audio, reports</span>
+              <span className="text-slate-300 font-mono text-[11px]">voice-reference-audio, analysis-audio, reports (schema only)</span>
             </div>
           </div>
         </div>

@@ -31,8 +31,38 @@ def test_health_model_loaded():
     r = client.get("/api/v1/health")
     assert r.status_code == 200
     j = r.json()
-    assert "model_loaded" in j
-    assert j["model_loaded"] in [True, False]
+    assert j["model_loaded"] is True
+    assert j["engine_mode"] == "aasist-cpu"
+
+
+def test_cors_preflight_allows_vite_origin():
+    r = client.options(
+        "/api/v1/analyses",
+        headers={
+            "Origin": "http://localhost:3000",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
+    )
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert "POST" in r.headers["access-control-allow-methods"]
+
+
+def test_explanation_is_valid_ascii_and_no_replacement_character():
+    with tempfile.TemporaryDirectory() as td:
+        p = pathlib.Path(td) / "valid.wav"
+        _make_wav(p, duration=2.0)
+        with open(p, "rb") as f:
+            r = client.post(
+                "/api/v1/analyses",
+                files={"file": ("valid.wav", f, "audio/wav")},
+                data={"source_type": "audio_upload"},
+            )
+        assert r.status_code == 200, r.text
+        explanation = r.json()["explanation"]
+        assert "�" not in explanation
+        explanation.encode("ascii")
 
 def test_analyses_valid_clip():
     with tempfile.TemporaryDirectory() as td:
@@ -43,6 +73,9 @@ def test_analyses_valid_clip():
         assert r.status_code == 200, r.text
         j = r.json()
         assert j["is_demo"] is False
+        assert j["id"]
+        import uuid
+        uuid.UUID(j["id"])
         assert "AASIST" in j["model_version"]
         assert 0 <= j["spoof_risk_score"] <= 100
         assert j["result_label"] in ["authentic", "suspicious", "synthetic_clone", "inconclusive"]
@@ -53,7 +86,7 @@ def test_analyses_valid_clip():
 def test_analyses_corrupted_rejected():
     r = client.post("/api/v1/analyses", files={"file": ("bad.wav", b"not audio at all", "audio/wav")}, data={"source_type": "audio_upload"})
     assert r.status_code == 400, r.text
-    assert "Invalid audio" in r.json()["detail"]
+    assert "not valid or decodable audio" in r.json()["detail"]
 
 def test_analyses_empty_rejected():
     r = client.post("/api/v1/analyses", files={"file": ("empty.wav", b"", "audio/wav")}, data={"source_type": "audio_upload"})

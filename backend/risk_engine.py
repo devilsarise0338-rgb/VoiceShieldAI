@@ -71,15 +71,15 @@ def map_risk(spoof_prob: float) -> dict:
         explanation = (
             f"Authentic human vocal tract likely ({auth_pct}% authenticity). "
             f"AASIST spoof probability {spoof_pct:.1f}% is below the low threshold ({low_thr*100:.0f}%). "
-            f"[Uncalibrated thresholds — calibrate on in-domain data; see risk_engine.py]"
+            f"[Uncalibrated thresholds - calibrate on in-domain data; see risk_engine.py]"
         )
     elif p <= high_thr:
         risk_level = "medium"
         result_label = "suspicious"
         recommendation = "Verify the caller through a known channel."
         explanation = (
-            f"Suspicious — AASIST spoof probability {spoof_pct:.1f}% in medium band "
-            f"({low_thr*100:.0f}–{high_thr*100:.0f}%). Human verification through a separate, "
+            f"Suspicious - AASIST spoof probability {spoof_pct:.1f}% in medium band "
+            f"({low_thr*100:.0f}-{high_thr*100:.0f}%). Human verification through a separate, "
             f"previously known channel is recommended. [Uncalibrated]"
         )
     else:
@@ -87,8 +87,8 @@ def map_risk(spoof_prob: float) -> dict:
         result_label = "synthetic_clone"
         recommendation = "Do not proceed; verify identity independently."
         explanation = (
-            f"Likely synthetic — AASIST spoof probability {spoof_pct:.1f}% exceeds high threshold "
-            f"({high_thr*100:.0f}%). Phase and spectral analysis suggests neural vocoder synthesis. "
+            f"Likely synthetic - AASIST spoof probability {spoof_pct:.1f}% exceeds high threshold "
+            f"({high_thr*100:.0f}%). AASIST indicates neural-vocoder-like spectral and temporal artifacts. "
             f"[Uncalibrated]"
         )
 

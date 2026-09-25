@@ -28,19 +28,25 @@ const DEMO_USER: UserProfile = {
 
 const LOCAL_STORAGE_USER_KEY = 'voiceshield_auth_user';
 
+function pickAllowedProfileUpdates(updates: Partial<UserProfile>): Partial<UserProfile> {
+  const allowed: Partial<UserProfile> = {};
+  if (typeof updates.full_name === 'string') allowed.full_name = updates.full_name;
+  if (typeof updates.avatar_url === 'string') allowed.avatar_url = updates.avatar_url;
+  if (typeof updates.organization === 'string') allowed.organization = updates.organization;
+  if (typeof updates.updated_at === 'string') allowed.updated_at = updates.updated_at;
+  return allowed;
+}
+
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(() => {
-    // Check cached demo user
+    if (!isSupabaseConfigured) return DEMO_USER;
     const saved = localStorage.getItem(LOCAL_STORAGE_USER_KEY);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return null;
-      }
+    if (!saved) return null;
+    try {
+      return JSON.parse(saved);
+    } catch {
+      return null;
     }
-    // Default to demo analyst so reviewers can experience all screens immediately
-    return DEMO_USER;
   });
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -51,20 +57,26 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     // Check active Supabase session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (error) {
+        console.warn('Could not restore Supabase session.', error.message);
+        setUser(null);
+        localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
+        setLoading(false);
+      } else if (session?.user) {
         syncUserProfile(session.user.id, session.user.email || '');
       } else {
-        // Keep existing cached user if present or fallback
         setLoading(false);
       }
     });
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
-        await syncUserProfile(session.user.id, session.user.email || '');
+        if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'USER_UPDATED') {
+          await syncUserProfile(session.user.id, session.user.email || '');
+        }
       } else {
         // Only clear if was logged in with live supabase
         if (isSupabaseConfigured) {
@@ -117,10 +129,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const signIn = async (email: string, password?: string): Promise<{ error?: string }> => {
     setLoading(true);
     if (isSupabaseConfigured && supabase) {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password: password || 'Test@123456',
-      });
+      if (!password) {
+        setLoading(false);
+        return { error: 'Enter your password.' };
+      }
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) {
         setLoading(false);
         return { error: error.message };
@@ -214,12 +227,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const updateUserProfile = async (updates: Partial<UserProfile>) => {
     if (!user) return;
-    const updated = { ...user, ...updates, updated_at: new Date().toISOString() };
+    const allowed = pickAllowedProfileUpdates(updates);
+    const updated = { ...user, ...allowed, updated_at: new Date().toISOString() };
     setUser(updated);
     localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(updated));
 
     if (isSupabaseConfigured && supabase) {
-      await supabase.from('profiles').update(updates).eq('id', user.id);
+      const { error } = await supabase.from('profiles').update(allowed).eq('id', user.id);
+      if (error) throw new Error(error.message);
     }
   };
 

@@ -1,7 +1,6 @@
 """
-VoiceShield AI - Backend Inference & Detection Server
-Problem Statement: AI-Powered Real-Time Detection and Prevention of Voice Cloning
-FastAPI Service with Reality Defender API Integration, Acoustic Signal Processing, and Live WebSocket Stream.
+VoiceShield AI - Backend AASIST Inference Server
+CPU-only anti-spoofing for uploaded audio. The WebSocket endpoint is explicitly simulated.
 """
 
 import os
@@ -12,12 +11,15 @@ import json
 import math
 import random
 import pathlib
-from typing import Optional, List
-from datetime import datetime
+import asyncio
+import tempfile
+from typing import Optional, List, Literal
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, UploadFile, Form, WebSocket, WebSocketDisconnect, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.concurrency import run_in_threadpool
 import requests
 
 # CPU-only, i3 2-core safe — never use CUDA
@@ -47,7 +49,7 @@ except ImportError:
 
 app = FastAPI(
     title="VoiceShield AI Detection Engine",
-    description="Real-Time Detection and Prevention of Voice Cloning & Impersonation Attacks — AASIST / ASVspoof2019-LA (CPU)",
+    description="Real AASIST anti-spoofing inference for VoiceShield AI (CPU)",
     version="2.4.0",
 )
 
@@ -57,28 +59,43 @@ async def startup_load_model():
     try:
         load_aasist_model("AASIST")
         print(f"[VoiceShield] AASIST loaded: {get_model_info()}")
-    except Exception as e:
-        print(f"[VoiceShield] AASIST failed to load: {e} — /api/v1/analyses will return 503 until model is available")
+    except Exception as exc:
+        import traceback
+        print(f"[VoiceShield] AASIST failed to load: {type(exc).__name__}: {exc}")
+        traceback.print_exc()
+        print("[VoiceShield] /api/v1/analyses will return 503 until the model is available")
 
 # Security: upload validation constants (do not weaken — these ARE the patches)
 ALLOWED_EXTS = {".wav", ".flac", ".mp3", ".ogg", ".m4a", ".mp4", ".oga"}
 ALLOWED_MIME_PREFIX = "audio/"
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
 MAX_FILENAME_LEN = 64
+# AASIST is CPU-heavy on the target i3. Serializing inference avoids multiple
+# requests multiplying memory use and runtime contention.
+_INFERENCE_SEMAPHORE = asyncio.Semaphore(1)
 
-# CORS configuration to allow local and production frontends
+# CORS configuration. Keep the local Vite origin explicit instead of combining
+# wildcard origins with credentials (which browsers reject as an insecure combo).
+_allowed_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    ).split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Accept"],
 )
 
 class SpectralArtifact(BaseModel):
     name: str
-    score: float
-    status: str
+    score: float = Field(ge=0.0, le=100.0)
+    status: Literal["normal", "anomaly_detected"]
     description: str
 
 class AudioAnalysisResponse(BaseModel):
@@ -86,16 +103,16 @@ class AudioAnalysisResponse(BaseModel):
     user_id: str = "usr_current"
     speaker_profile_id: Optional[str] = None
     speaker_name: Optional[str] = None
-    source_type: str
+    source_type: Literal["audio_upload", "live_stream", "telephony_stream", "reference_sample"]
     file_name: str
-    duration_seconds: float
-    status: str
-    result_label: str
-    risk_level: str
-    authenticity_score: float
-    spoof_risk_score: float
-    speaker_similarity_score: Optional[float] = None
-    model_confidence: float
+    duration_seconds: float = Field(ge=0.0)
+    status: Literal["queued", "processing", "completed", "failed"]
+    result_label: Literal["authentic", "suspicious", "synthetic_clone", "inconclusive"]
+    risk_level: Literal["safe", "low", "medium", "high", "critical"]
+    authenticity_score: float = Field(ge=0.0, le=100.0)
+    spoof_risk_score: float = Field(ge=0.0, le=100.0)
+    speaker_similarity_score: Optional[float] = Field(default=None, ge=0.0, le=100.0)
+    model_confidence: float = Field(ge=0.0, le=100.0)
     model_version: str = "AASIST / ASVspoof2019-LA"
     spectral_artifacts: List[SpectralArtifact] = []
     explanation: str
@@ -120,28 +137,27 @@ class SpeakerEnrollmentResponse(BaseModel):
 def read_root():
     return {
         "service": "VoiceShield AI Engine",
-        "status": "online",
+        "status": "ready" if is_model_loaded() else "degraded",
         "version": "2.4.0",
-        "reality_defender_configured": bool(REALITY_DEFENDER_API_KEY and not REALITY_DEFENDER_API_KEY.startswith("your-")),
-        "huggingface_configured": bool(HF_TOKEN),
+        "model_loaded": is_model_loaded(),
         "docs_url": "/docs",
     }
 
 @app.get("/api/v1/health")
 def health_check():
     info = get_model_info()
+    loaded = is_model_loaded()
     return {
-        "status": "healthy" if is_model_loaded() else "degraded",
-        "timestamp": datetime.utcnow().isoformat(),
-        "model_loaded": is_model_loaded(),
+        "status": "healthy" if loaded else "degraded",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "model_loaded": loaded,
         "model": info,
         "models": {
-            "primary_classifier": info.get("version", "AASIST / ASVspoof2019-LA") if is_model_loaded() else "AASIST (not loaded)",
+            "primary_classifier": info.get("version", "AASIST / ASVspoof2019-LA") if loaded else "AASIST (not loaded)",
             "vocoder_detector": "AASIST graph attention (spectral/temporal)",
             "biometric_matcher": "not used on this path (spoof only)",
         },
-        "engine_mode": "aasist-cpu" if is_model_loaded() else "model_not_loaded",
-        # Do not leak env config beyond boolean
+        "engine_mode": "aasist-cpu" if loaded else "model_not_loaded",
     }
 
 def analyze_with_reality_defender(audio_bytes: bytes, file_name: str) -> Optional[dict]:
@@ -181,7 +197,7 @@ def _sanitize_filename(name: str) -> str:
 async def submit_audio_analysis(
     file: UploadFile = File(...),
     speaker_profile_id: Optional[str] = Form(None),
-    source_type: str = Form("audio_upload"),
+    source_type: Literal["audio_upload", "live_stream", "telephony_stream", "reference_sample"] = Form("audio_upload"),
 ):
     """
     Primary REAL endpoint: AASIST (CPU) inference.
@@ -197,32 +213,43 @@ async def submit_audio_analysis(
     safe_name = _sanitize_filename(raw_name)
     ext = pathlib.Path(safe_name).suffix.lower()
     if ext not in ALLOWED_EXTS:
-        raise HTTPException(status_code=415, detail="Unsupported media type. Allowed: wav, flac, mp3, ogg, m4a.")
-    # Enforce content-type prefix if provided (not strictly trusted, but defense in depth)
+        raise HTTPException(status_code=415, detail="Unsupported file type. Upload WAV, FLAC, MP3, OGG, M4A, or MP4 audio.")
+    # Content-Type is only a quick rejection hint; the decoder below is authoritative.
+    # Browsers and command-line clients do not always send the same MIME type, so
+    # reject explicit non-audio types while allowing octet-stream and audio/*.
     if file.content_type and not file.content_type.startswith(ALLOWED_MIME_PREFIX) and file.content_type != "application/octet-stream":
-        # allow octet-stream (some browsers send generic), but reject obvious non-audio
-        if file.content_type.startswith("text/") or file.content_type.startswith("video/") or file.content_type == "application/json":
-            raise HTTPException(status_code=415, detail="Unsupported media type.")
+        raise HTTPException(status_code=415, detail="Unsupported content type. Upload an audio file.")
 
     contents = await file.read()
     if len(contents) == 0:
-        raise HTTPException(status_code=400, detail="Invalid audio file.")
+        raise HTTPException(status_code=400, detail="The selected audio file is empty. Choose a non-empty recording and try again.")
     if len(contents) > MAX_FILE_SIZE:
-        raise HTTPException(status_code=413, detail="File too large. Max 25 MB.")
+        raise HTTPException(status_code=413, detail="The selected audio file is too large. The maximum size is 25 MB.")
 
-    now_iso = datetime.utcnow().isoformat()
-    analysis_id = "ana_" + uuid.uuid4().hex[:10]
+    now_iso = datetime.now(timezone.utc).isoformat()
+    # UUID format matches the Supabase audio_analyses primary key, so a real backend
+    # result can be persisted without a client-side remap.
+    analysis_id = str(uuid.uuid4())
 
     # ---- REAL inference (AASIST) ----
     try:
-        inf = aasist_infer(contents, safe_name)
-    except ValueError as ve:
-        # Generic invalid audio, do not leak stack / path
-        raise HTTPException(status_code=400, detail="Invalid audio file. Could not decode or score.")
-    except Exception as e:
-        # Never leak internals
-        print(f"[VoiceShield] inference failed: {type(e).__name__}")
-        raise HTTPException(status_code=500, detail="Analysis failed.")
+        async with _INFERENCE_SEMAPHORE:
+            inf = await run_in_threadpool(aasist_infer, contents, safe_name)
+    except ValueError:
+        # Return an actionable message while keeping decoder internals out of HTTP responses.
+        raise HTTPException(
+            status_code=400,
+            detail="The selected file is not valid or decodable audio. Try WAV, FLAC, MP3, OGG, or M4A.",
+        )
+    except Exception as exc:
+        # Never leak internals over HTTP, but retain the full traceback in server logs.
+        import traceback
+        print(f"[VoiceShield] inference failed: {type(exc).__name__}: {exc}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500,
+            detail="Audio analysis failed on the server. Check the backend log and try again.",
+        )
 
     # Map spoof probability -> risk tier (GOAL thresholds, configurable via env, uncalibrated)
     spoof_p = float(inf["spoof_probability"])  # 0..1, index 0 = spoof (verified)
@@ -231,7 +258,7 @@ async def submit_audio_analysis(
     auth_score = float(risk["authenticity_score"])
     result_label = risk["result_label"]
     risk_level = risk["risk_level"]
-    explanation = risk["explanation"] + f" ({risk['recommendation']})"
+    explanation = f"{risk['explanation']} Recommendation: {risk['recommendation']}"
     # Model confidence: for AASIST we surface 1 - |0.5 - p|*2 as distance from decision boundary,
     # but more simply use max(spoof_p, 1-spoof_p)*100 as calibrated confidence placeholder
     model_confidence = round(max(spoof_p, 1 - spoof_p) * 100, 1)
@@ -297,11 +324,34 @@ async def submit_audio_analysis(
         explanation=explanation,
         is_demo=False,  # REAL result — never simulated
         created_at=now_iso,
-        completed_at=datetime.utcnow().isoformat(),
+        completed_at=datetime.now(timezone.utc).isoformat(),
         processing_time_ms=processing_ms,
         num_windows=num_windows,
         spoof_probability_max=round(spoof_max * 100, 1),
     )
+
+def _decode_enrollment_audio(contents: bytes, suffix: str):
+    """Decode enrollment bytes to obtain real sample rate and duration."""
+    import soundfile as sf
+    tmp_path: Optional[pathlib.Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix or ".wav", delete=False) as tmp:
+            tmp.write(contents)
+            tmp_path = pathlib.Path(tmp.name)
+        try:
+            data, sample_rate = sf.read(str(tmp_path), dtype="float32", always_2d=False)
+        except Exception:
+            import torchaudio
+            waveform, sample_rate = torchaudio.load(str(tmp_path))
+            data = waveform.mean(dim=0).numpy().astype("float32")
+        if data.size == 0 or sample_rate <= 0:
+            raise ValueError("No decodable samples")
+        return data, int(sample_rate)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 @app.post("/api/v1/enrollment", response_model=SpeakerEnrollmentResponse)
 async def enroll_speaker(
@@ -314,19 +364,33 @@ async def enroll_speaker(
     Computes acoustic embeddings and cryptographic hash of voice identity.
     """
     contents = await file.read()
-    speaker_id = "spk_" + uuid.uuid4().hex[:8]
-    # Compute deterministic SHA-256 voiceprint hash
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="The enrollment audio file is empty.")
+    if len(contents) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=413, detail="The enrollment audio file is too large. Max 25 MB.")
+    safe_name = _sanitize_filename(file.filename or "enrollment.wav")
+    ext = pathlib.Path(safe_name).suffix.lower()
+    if ext not in ALLOWED_EXTS:
+        raise HTTPException(status_code=415, detail="Unsupported enrollment audio type.")
+
+    try:
+        decoded, native_sr = _decode_enrollment_audio(contents, ext)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="The enrollment recording could not be decoded.")
+
+    speaker_id = str(uuid.uuid4())
     import hashlib
-    voiceprint_hash = "vp_" + hashlib.sha256(contents).hexdigest()[:24]
+    # Full SHA-256 file fingerprint. This is not a speaker embedding or biometric template.
+    voiceprint_hash = "vp_" + hashlib.sha256(contents).hexdigest()
 
     return SpeakerEnrollmentResponse(
         speaker_id=speaker_id,
-        display_name=display_name,
+        display_name=display_name.strip()[:120],
         voiceprint_hash=voiceprint_hash,
-        audio_duration_seconds=round(max(4.0, len(contents) / 32000), 1),
-        sample_rate_hz=44100,
-        enrollment_status="enrolled",
-        created_at=datetime.utcnow().isoformat(),
+        audio_duration_seconds=round(decoded.shape[0] / native_sr, 2),
+        sample_rate_hz=native_sr,
+        enrollment_status="reference_received",
+        created_at=datetime.now(timezone.utc).isoformat(),
     )
 
 @app.websocket("/ws/v1/live-detection")
@@ -360,7 +424,7 @@ async def websocket_live_detection(websocket: WebSocket):
                 anomaly = None
 
             payload = {
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "authenticityScore": auth,
                 "spoofRiskScore": spoof,
                 "speakerSimilarityScore": round(random.uniform(89.0, 97.0), 1),

@@ -50,7 +50,7 @@ export const LiveDetectionPage: React.FC = () => {
   const navigate = useNavigate();
 
   // Selected speaker profile to match against (optional)
-  const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>('spk_01');
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>('');
   const [isPaused, setIsPaused] = useState(false);
   const [durationSeconds, setDurationSeconds] = useState(0);
   const timerRef = useRef<number | null>(null);
@@ -59,7 +59,7 @@ export const LiveDetectionPage: React.FC = () => {
   const [liveRisk, setLiveRisk] = useState<RiskLevel>('safe');
   const [authenticityScore, setAuthenticityScore] = useState<number>(96);
   const [spoofRiskScore, setSpoofRiskScore] = useState<number>(4);
-  const [speakerSimilarityScore, setSpeakerSimilarityScore] = useState<number>(94);
+  const [speakerSimilarityScore, setSpeakerSimilarityScore] = useState<number | null>(null);
   const [modelConfidence, setModelConfidence] = useState<number>(96.5);
   const [explanation, setExplanation] = useState<string>(
     'Real-time acoustic telemetry listening. Natural vocal tract phase coherence maintained.'
@@ -116,7 +116,9 @@ export const LiveDetectionPage: React.FC = () => {
   }, [isPaused, isRecording]);
 
   const handleStartMonitoring = async () => {
-    const success = await startRecording(selectedDeviceId);
+    const success = await startRecording(selectedDeviceId, (chunk) => {
+      liveDetectionWs.sendAudioChunk(chunk);
+    });
     if (success) {
       liveDetectionWs.connect(selectedSpeakerId);
       setDurationSeconds(0);
@@ -139,10 +141,10 @@ export const LiveDetectionPage: React.FC = () => {
     if (durationSeconds > 2) {
       const isSuspicious = spoofRiskScore > 50;
       const newAnalysis: AudioAnalysis = {
-        id: 'ana_' + Math.random().toString(36).substring(2, 9),
+        id: crypto.randomUUID(),
         user_id: 'usr_current',
-        speaker_profile_id: selectedSpeakerId,
-        speaker_name: selectedSpeaker?.display_name,
+        speaker_profile_id: selectedSpeakerId || null,
+        speaker_name: selectedSpeaker?.display_name ?? null,
         source_type: 'live_stream',
         file_name: `live_stream_${new Date().toISOString().substring(11, 19).replace(/:/g, '-')}.raw`,
         duration_seconds: durationSeconds,
@@ -151,7 +153,7 @@ export const LiveDetectionPage: React.FC = () => {
         risk_level: liveRisk,
         authenticity_score: authenticityScore,
         spoof_risk_score: spoofRiskScore,
-        speaker_similarity_score: speakerSimilarityScore,
+        speaker_similarity_score: null,
         model_confidence: modelConfidence,
         model_version: backendConfig.selectedModel,
         spectral_artifacts: [
@@ -533,22 +535,11 @@ export const LiveDetectionPage: React.FC = () => {
                 <div>
                   <div className="flex items-center justify-between text-xs mb-1.5">
                     <span className="text-slate-400 font-medium">Enrolled Speaker Match</span>
-                    <span
-                      className={`font-bold text-sm ${
-                        speakerSimilarityScore > 75 ? 'text-emerald-400' : 'text-rose-400'
-                      }`}
-                    >
-                      {speakerSimilarityScore}%
-                    </span>
+                    <span className="font-bold text-sm text-amber-400">Not calculated</span>
                   </div>
-                  <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-800/80">
-                    <div
-                      className={`h-full transition-all duration-300 ${
-                        speakerSimilarityScore > 75 ? 'bg-emerald-400' : 'bg-rose-500'
-                      }`}
-                      style={{ width: `${speakerSimilarityScore}%` }}
-                    />
-                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    AASIST performs anti-spoofing only; speaker similarity requires a separate verification model.
+                  </p>
                 </div>
               )}
 

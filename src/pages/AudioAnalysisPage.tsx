@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload,
@@ -26,48 +26,36 @@ export const AudioAnalysisPage: React.FC = () => {
   const navigate = useNavigate();
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [targetSpeakerId, setTargetSpeakerId] = useState<string>('spk_01');
+  const [targetSpeakerId, setTargetSpeakerId] = useState<string>('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   const [analysisStep, setAnalysisStep] = useState<string>('');
   const [analysisResult, setAnalysisResult] = useState<AudioAnalysis | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
 
-  // Sample files for instant review by hackathon evaluators
-  const sampleAudioCases = [
-    {
-      name: 'Sample_Authentic_Dispatch_Col_Rathore.wav',
-      size: '1.4 MB',
-      duration: '0:14',
-      type: 'Authentic Human Recording',
-      description: 'Natural biological resonance, organic F0 micro-tremor, and acoustic room reflections.',
-      isSpoof: false,
-    },
-    {
-      name: 'Sample_ElevenLabs_ZeroShot_Impersonation.mp3',
-      size: '2.1 MB',
-      duration: '0:22',
-      type: 'Synthetic Deepfake Clone',
-      description: 'Zero-shot neural TTS with robotic pitch flattening and spectral phase discontinuity.',
-      isSpoof: true,
-    },
-    {
-      name: 'Sample_HiFiGAN_Vocoder_TransferOrder.wav',
-      size: '3.8 MB',
-      duration: '0:36',
-      type: 'Vocoder Spoof Attack',
-      description: 'High-frequency energy cutoff above 7.8 kHz and unnatural phonetic co-articulation.',
-      isSpoof: true,
-    },
-  ];
+  // NOTE: bundled "sample" buttons used to create fake byte buffers and then force
+  // predetermined verdicts. They were removed so this screen can never display a
+  // simulated result while claiming the real pipeline ran.
 
   const handleFileSelect = (file: File) => {
+    if (file.size > 25 * 1024 * 1024) {
+      setAnalysisError('The selected file is larger than 25 MB. Choose a smaller recording.');
+      return;
+    }
+    setAnalysisError(null);
     setSelectedFile(file);
-    const objectUrl = URL.createObjectURL(file);
-    setAudioUrl(objectUrl);
+    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    setAudioUrl(URL.createObjectURL(file));
     setAnalysisResult(null);
   };
+
+  useEffect(() => {
+    return () => {
+      if (audioUrl) URL.revokeObjectURL(audioUrl);
+    };
+  }, [audioUrl]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -86,72 +74,36 @@ export const AudioAnalysisPage: React.FC = () => {
     }
   };
 
-  const handleLoadSample = (sample: (typeof sampleAudioCases)[0]) => {
-    // Generate a lightweight dummy file for audio player simulation
-    const dummyFile = new File(['dummy audio content buffer for demonstration'], sample.name, {
-      type: sample.name.endsWith('.mp3') ? 'audio/mp3' : 'audio/wav',
-    });
-    setSelectedFile(dummyFile);
-    setAudioUrl(null); // Will use sample visualization
-    setAnalysisResult(null);
-
-    // Auto-run analysis for sample to provide instant feedback
-    runFileAnalysis(dummyFile, sample.isSpoof, sample.name);
-  };
-
-  const runFileAnalysis = async (fileToAnalyze: File, forceSpoof?: boolean, sampleName?: string) => {
+  const runFileAnalysis = async (fileToAnalyze: File) => {
     setIsAnalyzing(true);
-    setAnalysisProgress(15);
-    setAnalysisStep('Ingesting audio stream and decoding PCM frames...');
+    setAnalysisError(null);
+    setAnalysisResult(null);
+    setAnalysisProgress(20);
+    setAnalysisStep('Uploading audio and running AASIST CPU inference...');
 
-    setTimeout(() => {
-      setAnalysisProgress(45);
-      setAnalysisStep('Extracting Constant-Q Cepstral & Linear Predictive coefficients...');
-    }, 400);
+    const progressTimer = window.setInterval(() => {
+      setAnalysisProgress((current) => Math.min(90, current + 4));
+    }, 700);
 
-    setTimeout(() => {
-      setAnalysisProgress(75);
-      setAnalysisStep('Evaluating RawNet3 neural vocoder anti-spoofing pipeline...');
-    }, 900);
-
-    setTimeout(async () => {
-      setAnalysisProgress(95);
-      setAnalysisStep('Comparing enrolled voiceprint baseline in biometric vault...');
-
+    try {
       const targetSpeaker = speakerProfiles.find((s) => s.id === targetSpeakerId);
-
       const result = await aiDetectionService.analyzeAudioFile(
         fileToAnalyze,
         targetSpeakerId || undefined,
         targetSpeaker?.display_name
       );
-
-      // If sample was forced spoof/authentic, adjust scores for realistic testing
-      if (forceSpoof !== undefined) {
-        if (forceSpoof) {
-          result.result_label = 'synthetic_clone';
-          result.risk_level = 'critical';
-          result.spoof_risk_score = 92;
-          result.authenticity_score = 8;
-          result.speaker_similarity_score = 23;
-          result.explanation =
-            'CRITICAL ANOMALY: Neural speech synthesis vocoder artifacts flagged in multiple frequency bands. The audio lacks biological vocal tract resonance and exhibits phase discontinuity typical of diffusion-based voice cloning models.';
-        } else {
-          result.result_label = 'authentic';
-          result.risk_level = 'safe';
-          result.spoof_risk_score = 4;
-          result.authenticity_score = 96;
-          result.speaker_similarity_score = 95;
-          result.explanation =
-            'VERIFIED AUTHENTIC: Spectral analysis conforms to organic human vocal fold physics. Natural micro-jitter and phoneme transitions match enrolled baseline profile.';
-        }
-      }
-
       setAnalysisResult(result);
-      addAnalysis(result);
-      setIsAnalyzing(false);
+      await addAnalysis(result);
       setAnalysisProgress(100);
-    }, 1500);
+      setAnalysisStep('AASIST analysis completed.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Audio analysis failed unexpectedly.';
+      setAnalysisError(message);
+      setAnalysisStep('Analysis stopped.');
+    } finally {
+      window.clearInterval(progressTimer);
+      setIsAnalyzing(false);
+    }
   };
 
   const handleStartAnalysis = () => {
@@ -168,20 +120,20 @@ export const AudioAnalysisPage: React.FC = () => {
       priority: analysisResult.risk_level === 'critical' ? 'urgent' : 'high',
       status: 'open',
       assigned_to: 'Forensics Incident Desk',
-      target_individual: analysisResult.speaker_name,
+      target_individual: analysisResult.speaker_name ?? undefined,
     });
     navigate('/investigations');
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 p-6 lg:p-8">
       {/* Header */}
       <div className="border-b border-slate-800/80 pb-4">
         <h2 className="text-xl font-bold tracking-tight text-white sm:text-2xl">
           Forensic Audio File Analysis
         </h2>
         <p className="mt-1 text-xs text-slate-400">
-          Upload recorded voice interactions, voicemail dispatches, or intercepted audio files for in-depth spectral forensics.
+          Upload recorded voice interactions for AASIST anti-spoofing inference. This endpoint detects likely synthetic speech; it does not verify a speaker's identity.
         </p>
       </div>
 
@@ -208,7 +160,7 @@ export const AudioAnalysisPage: React.FC = () => {
               Drag & drop audio recording here
             </h3>
             <p className="mt-1 text-xs text-slate-400">
-              Supports WAV, MP3, M4A, FLAC, and OGG containers (up to 50 MB)
+              Supports WAV, MP3, M4A, FLAC, and OGG (up to 25 MB; first 30 seconds analyzed)
             </p>
 
             <div className="mt-4 flex items-center gap-2">
@@ -217,7 +169,7 @@ export const AudioAnalysisPage: React.FC = () => {
                 <input
                   type="file"
                   accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg"
-                  className="hidden"
+                  className="sr-only"
                   onChange={(e) => {
                     if (e.target.files && e.target.files[0]) {
                       handleFileSelect(e.target.files[0]);
@@ -235,53 +187,16 @@ export const AudioAnalysisPage: React.FC = () => {
             )}
           </div>
 
-          {/* Instant Sample Verification Bank (For Hackathon Reviewers) */}
-          <div className="rounded-xl border border-slate-800/80 bg-slate-900/40 p-4">
-            <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5 mb-3">
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-4 w-4 text-amber-400" />
-                <span className="text-xs font-semibold uppercase tracking-wider text-slate-300">
-                  Pre-Configured Evaluation Samples
-                </span>
+          <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4">
+            <div className="flex items-start gap-3">
+              <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-400" />
+              <div>
+                <p className="text-xs font-semibold text-blue-200">Real inference only</p>
+                <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                  Demo samples and forced verdicts have been removed. Every file selected here is sent to
+                  <span className="font-mono text-blue-300"> POST /api/v1/analyses</span> and scored by AASIST.
+                </p>
               </div>
-              <span className="text-[11px] font-medium text-amber-400">Click to Test</span>
-            </div>
-
-            <div className="space-y-2.5">
-              {sampleAudioCases.map((sample, idx) => (
-                <div
-                  key={idx}
-                  onClick={() => handleLoadSample(sample)}
-                  className="group flex cursor-pointer items-center justify-between rounded-lg border border-slate-800/80 bg-slate-950/60 p-3 transition hover:border-blue-500/40 hover:bg-slate-900/60"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-800 text-slate-400 group-hover:text-blue-400 group-hover:bg-blue-500/10 transition">
-                      <FileAudio className="h-4 w-4" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-medium text-slate-200 group-hover:text-blue-400 transition">
-                          {sample.name}
-                        </span>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-medium border ${
-                            sample.isSpoof
-                              ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-                              : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                          }`}
-                        >
-                          {sample.type}
-                        </span>
-                      </div>
-                      <p className="mt-0.5 text-xs text-slate-400 line-clamp-1">{sample.description}</p>
-                    </div>
-                  </div>
-
-                  <span className="text-xs font-medium text-blue-400 opacity-0 group-hover:opacity-100 transition">
-                    Analyze →
-                  </span>
-                </div>
-              ))}
             </div>
           </div>
         </div>
@@ -311,7 +226,7 @@ export const AudioAnalysisPage: React.FC = () => {
                   ))}
                 </select>
                 <p className="mt-1 text-xs text-slate-400">
-                  Compares audio against biometric MFCC & x-vector voiceprints in the enrolled vault.
+                  Optional context only. AASIST performs anti-spoofing; it does not perform speaker verification.
                 </p>
               </div>
 
@@ -322,18 +237,25 @@ export const AudioAnalysisPage: React.FC = () => {
                 <div className="rounded-lg bg-slate-950/80 p-3 border border-slate-800/80 text-xs text-slate-300">
                   <div className="flex justify-between">
                     <span className="text-slate-400">Engine:</span>
-                    <span className="text-blue-400 font-medium">RawNet3 + WavLM Large</span>
+                    <span className="text-blue-400 font-medium">AASIST / ASVspoof2019-LA (CPU)</span>
                   </div>
                   <div className="flex justify-between mt-1 text-xs">
-                    <span className="text-slate-400">Feature Filters:</span>
-                    <span className="text-slate-300">LPC, CQCC, F0 Contour</span>
+                    <span className="text-slate-400">Input:</span>
+                    <span className="text-slate-300">16 kHz mono, 64,600-sample windows</span>
                   </div>
                 </div>
               </div>
 
               {/* Progress Indicator */}
+              {analysisError && (
+                <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs leading-relaxed text-rose-200">
+                  <strong className="block font-semibold">Analysis failed</strong>
+                  <span className="mt-1 block">{analysisError}</span>
+                </div>
+              )}
+
               {isAnalyzing && (
-                <div className="rounded-lg bg-slate-950 p-3 border border-blue-500/30 space-y-2">
+                <div role="status" aria-live="polite" className="rounded-lg bg-slate-950 p-3 border border-blue-500/30 space-y-2">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-blue-400 font-medium">Analyzing audio...</span>
                     <span className="text-blue-400 font-mono">{analysisProgress}%</span>
@@ -360,7 +282,7 @@ export const AudioAnalysisPage: React.FC = () => {
                 {isAnalyzing ? (
                   <span className="flex items-center gap-2">
                     <span className="h-3.5 w-3.5 rounded-full border-2 border-blue-400 border-t-transparent animate-spin" />
-                    Computing forensic matrix...
+                    Running AASIST inference...
                   </span>
                 ) : (
                   <>
@@ -384,7 +306,7 @@ export const AudioAnalysisPage: React.FC = () => {
             </div>
           ) : (
             <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300 flex items-center justify-between">
-              <span>REAL RESULT — {analysisResult.model_version} • CPU • {analysisResult.processing_time_ms ? `${analysisResult.processing_time_ms} ms` : ""} {analysisResult.num_windows ? `• ${analysisResult.num_windows} window(s)` : ""}</span>
+              <span>REAL RESULT - {analysisResult.model_version} • CPU • {analysisResult.processing_time_ms ? `${analysisResult.processing_time_ms} ms` : ""} {analysisResult.num_windows ? `• ${analysisResult.num_windows} window(s)` : ""}</span>
               <span className="text-[11px] text-emerald-400/70">{analysisResult.spoof_probability_max ? `max window ${analysisResult.spoof_probability_max}%` : ""}</span>
             </div>
           )}
@@ -450,7 +372,7 @@ export const AudioAnalysisPage: React.FC = () => {
                   (analysisResult.speaker_similarity_score ?? 0) > 75 ? 'text-emerald-400' : 'text-rose-400'
                 }`}
               >
-                {analysisResult.speaker_similarity_score !== undefined
+                {analysisResult.speaker_similarity_score != null
                   ? `${analysisResult.speaker_similarity_score}%`
                   : 'N/A'}
               </p>
@@ -462,7 +384,7 @@ export const AudioAnalysisPage: React.FC = () => {
             <div className="rounded-xl border border-slate-800/80 bg-slate-950/80 p-4">
               <span className="text-xs text-slate-400 font-medium">Model Verification</span>
               <p className="mt-1 text-base font-semibold text-slate-200 truncate">{analysisResult.model_version}</p>
-              <span className="text-[11px] text-emerald-400 font-medium">Probabilistic Bound: ±2.4%</span>
+              <span className="text-[11px] text-amber-400 font-medium">Thresholds are uncalibrated</span>
             </div>
           </div>
 

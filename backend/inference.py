@@ -31,7 +31,6 @@ STEP-1 VERIFICATION — class indices & preprocessing (do NOT assume):
   - eval expects mono, 16kHz, float32 Tensor of exactly 64600 samples.
 """
 
-import gc
 import json
 import time
 import tempfile
@@ -78,18 +77,14 @@ _MODEL_CFG: Optional[dict] = None
 
 def _pad(x: np.ndarray, max_len: int = _NB_SAMP) -> np.ndarray:
     """Deterministic pad/repeat exactly as data_utils.pad() at eval."""
+    x = np.asarray(x).reshape(-1)
     x_len = x.shape[0]
+    if x_len == 0:
+        raise ValueError("Cannot pad an empty waveform.")
     if x_len >= max_len:
         return x[:max_len]
-    num_repeats = int(max_len / x_len) + 1
-    padded = np.tile(x, (1, num_repeats))[:, :max_len][0] if x.ndim == 1 else np.tile(x, (num_repeats))[:max_len]
-    # handle 1-D directly for speed
-    if x.ndim == 1:
-        # np.tile 1-D: simpler
-        repeats = int(np.ceil(max_len / x_len))
-        tiled = np.tile(x, repeats)[:max_len]
-        return tiled
-    return padded
+    repeats = int(np.ceil(max_len / x_len))
+    return np.tile(x, repeats)[:max_len]
 
 def _ensure_mono_16k(waveform: np.ndarray, sr: int) -> np.ndarray:
     """Convert to mono float32, resample to 16kHz if needed."""
@@ -139,7 +134,7 @@ def load_model(variant: str = "AASIST") -> torch.nn.Module:
         ckpt_path = VENDOR / "models" / "weights" / "AASIST.pth"
         model_version = "AASIST / ASVspoof2019-LA"
 
-    with open(conf_path, "r") as f:
+    with open(conf_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
     model_cfg = cfg["model_config"]
@@ -149,7 +144,7 @@ def load_model(variant: str = "AASIST") -> torch.nn.Module:
     Model = getattr(mod, "Model")
     model = Model(model_cfg)
     # map_location cpu is critical on this machine (GOAL)
-    state = torch.load(str(ckpt_path), map_location="cpu")
+    state = torch.load(str(ckpt_path), map_location="cpu", weights_only=True)
     model.load_state_dict(state)
     model.to("cpu")
     model.eval()
@@ -284,8 +279,14 @@ def infer_from_bytes(file_bytes: bytes, filename: str = "audio.wav") -> Dict:
     t0 = time.perf_counter()
     # Decode
     raw_wav, sr = _decode_audio(file_bytes, filename)
+    if raw_wav.size == 0:
+        raise ValueError("Decoded audio contains no samples.")
     # Preprocess to mono 16k
     wav = _ensure_mono_16k(raw_wav, sr)
+    if wav.size == 0 or not np.all(np.isfinite(wav)):
+        raise ValueError("Decoded audio contains no usable samples.")
+    if float(np.max(np.abs(wav))) < 1e-6:
+        raise ValueError("Decoded audio is silent.")
     # Cap & window
     windows = _window_waveform(wav)
     # Score
@@ -298,9 +299,6 @@ def infer_from_bytes(file_bytes: bytes, filename: str = "audio.wav") -> Dict:
     duration_seconds = float(wav.shape[0] / _SAMPLE_RATE)
     num_windows = len(windows)
     processing_time_ms = int((time.perf_counter() - t0) * 1000)
-
-    # Clean up any large tensors explicitly (help i3 GC)
-    gc.collect()
 
     return {
         "spoof_probability": spoof_probability,  # 0..1, index 0 = spoof (verified)

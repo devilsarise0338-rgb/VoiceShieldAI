@@ -8,11 +8,12 @@ export interface UseAudioAnalyzerReturn {
   selectedDeviceId: string;
   recordedBlob: Blob | null;
   analyserNode: AnalyserNode | null;
-  startRecording: (deviceId?: string) => Promise<boolean>;
+  startRecording: (deviceId?: string, onAudioChunk?: (chunk: Blob) => void) => Promise<boolean>;
   stopRecording: () => Blob | null;
   setSelectedDeviceId: (id: string) => void;
   resetRecording: () => void;
   errorMessage: string | null;
+  onAudioChunk?: (chunk: Blob) => void;
 }
 
 export function useAudioAnalyzer(): UseAudioAnalyzerReturn {
@@ -71,7 +72,7 @@ export function useAudioAnalyzer(): UseAudioAnalyzerReturn {
   }, []);
 
   const startRecording = useCallback(
-    async (deviceId?: string): Promise<boolean> => {
+    async (deviceId?: string, onAudioChunk?: (chunk: Blob) => void): Promise<boolean> => {
       cleanUpStream();
       setErrorMessage(null);
 
@@ -118,6 +119,7 @@ export function useAudioAnalyzer(): UseAudioAnalyzerReturn {
         recorder.ondataavailable = (event) => {
           if (event.data && event.data.size > 0) {
             recordedChunksRef.current.push(event.data);
+            onAudioChunk?.(event.data);
           }
         };
 

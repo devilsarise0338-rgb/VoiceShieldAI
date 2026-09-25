@@ -53,8 +53,8 @@ export interface SpectralArtifact {
 export interface AudioAnalysis {
   id: string;
   user_id: string;
-  speaker_profile_id?: string;
-  speaker_name?: string;
+  speaker_profile_id?: string | null;
+  speaker_name?: string | null;
   source_type: SourceType;
   file_name?: string;
   file_path?: string;
@@ -64,17 +64,17 @@ export interface AudioAnalysis {
   risk_level: RiskLevel;
   authenticity_score: number; // 0 - 100 (100 = definitely human)
   spoof_risk_score: number; // 0 - 100 (100 = definitely cloned)
-  speaker_similarity_score?: number; // 0 - 100 (match with enrolled voice)
+  speaker_similarity_score?: number | null; // 0 - 100 (match with enrolled voice)
   model_confidence: number; // 0 - 100%
   model_version: string;
   spectral_artifacts: SpectralArtifact[];
   explanation: string;
   created_at: string;
-  completed_at?: string;
+  completed_at?: string | null;
   is_demo: boolean;
-  processing_time_ms?: number;
-  num_windows?: number;
-  spoof_probability_max?: number;
+  processing_time_ms?: number | null;
+  num_windows?: number | null;
+  spoof_probability_max?: number | null;
 }
 
 export interface DetectionEvent {

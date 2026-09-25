@@ -17,6 +17,7 @@ import {
   Volume2,
 } from 'lucide-react';
 import { useData } from '../context/DataContext';
+import { aiDetectionService } from '../services/aiDetectionService';
 import { useAudioAnalyzer } from '../hooks/useAudioAnalyzer';
 import { SpeakerProfile } from '../types';
 import { EmptyState } from '../components/common/EmptyState';
@@ -32,6 +33,7 @@ export const SpeakerProfilesPage: React.FC = () => {
   const [enrollmentMode, setEnrollmentMode] = useState<'record' | 'upload'>('record');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [enrollmentError, setEnrollmentError] = useState<string | null>(null);
 
   // Audio recording for enrollment
   const {
@@ -52,29 +54,52 @@ export const SpeakerProfilesPage: React.FC = () => {
 
   const handleSubmitEnrollment = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim()) {
+      setEnrollmentError('Enter the speaker name.');
+      return;
+    }
+    const sample = uploadedFile || recordedBlob;
+    if (!sample || sample.size === 0) {
+      setEnrollmentError('Record at least a few seconds of speech or select an audio file.');
+      return;
+    }
+    if (sample.size > 25 * 1024 * 1024) {
+      setEnrollmentError('The enrollment sample is larger than 25 MB.');
+      return;
+    }
 
     setIsSubmitting(true);
-
-    const newProfile: Omit<SpeakerProfile, 'id' | 'created_at' | 'updated_at'> = {
-      user_id: 'usr_current',
-      display_name: name.trim(),
-      department: department.trim() || 'General Operations',
-      enrollment_status: 'enrolled',
-      voiceprint_hash: 'vprint_' + Math.random().toString(36).substring(2, 10) + '_sha256',
-      sample_rate_hz: 48000,
-      total_verifications: 0,
-      total_samples_enrolled: 1,
-      last_verified_at: new Date().toISOString(),
-    };
-
-    await addSpeakerProfile(newProfile);
-
-    setIsSubmitting(false);
-    setIsEnrollModalOpen(false);
-    setName('');
-    setDepartment('');
-    setUploadedFile(null);
+    setEnrollmentError(null);
+    try {
+      const fileName = uploadedFile?.name || `speaker_enrollment_${Date.now()}.webm`;
+      const result = await aiDetectionService.enrollSpeakerProfile(
+        name.trim(),
+        department.trim() || undefined,
+        sample,
+        fileName
+      );
+      const newProfile: Omit<SpeakerProfile, 'id' | 'created_at' | 'updated_at'> = {
+        user_id: 'usr_current',
+        display_name: result.display_name,
+        department: department.trim() || 'General Operations',
+        enrollment_status: 'enrolled',
+        voiceprint_hash: result.voiceprint_hash,
+        audio_duration_seconds: result.audio_duration_seconds,
+        sample_rate_hz: result.sample_rate_hz,
+        total_verifications: 0,
+        total_samples_enrolled: 1,
+        last_verified_at: new Date().toISOString(),
+      };
+      await addSpeakerProfile(newProfile);
+      setIsEnrollModalOpen(false);
+      setName('');
+      setDepartment('');
+      setUploadedFile(null);
+    } catch (error) {
+      setEnrollmentError(error instanceof Error ? error.message : 'Speaker enrollment failed.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleDelete = async (id: string, name: string) => {
@@ -371,7 +396,7 @@ export const SpeakerProfilesPage: React.FC = () => {
 
                   {recordedBlob && (
                     <p className="mt-3 text-xs text-emerald-400 font-medium">
-                      ✓ Audio calibrated ({(recordedBlob.size / 1024).toFixed(1)} KB PCM captured)
+                      Audio captured ({(recordedBlob.size / 1024).toFixed(1)} KB browser recording)
                     </p>
                   )}
                 </div>
@@ -395,6 +420,12 @@ export const SpeakerProfilesPage: React.FC = () => {
                 </div>
               )}
 
+              {enrollmentError && (
+                <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">
+                  {enrollmentError}
+                </div>
+              )}
+
               <div className="flex items-center justify-end gap-3 border-t border-slate-800/80 pt-4">
                 <button
                   type="button"
@@ -408,7 +439,7 @@ export const SpeakerProfilesPage: React.FC = () => {
                   disabled={isSubmitting || !name.trim()}
                   className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-medium text-white hover:bg-blue-500 disabled:opacity-50 shadow-sm transition"
                 >
-                  {isSubmitting ? 'Generating Voiceprint Hash...' : 'Save & Enroll to Vault →'}
+                  {isSubmitting ? 'Submitting enrollment audio...' : 'Save & Enroll to Vault →'}
                 </button>
               </div>
             </form>

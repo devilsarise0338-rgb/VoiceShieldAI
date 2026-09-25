@@ -156,7 +156,7 @@ export const ReportsPage: React.FC = () => {
             <div className="rounded-xl border border-slate-800/80 bg-slate-900/50 p-4 print:border-slate-300 print:bg-slate-50">
               <span className="text-xs text-slate-400 print:text-slate-600 uppercase tracking-wider block font-medium">Speaker Identity Match</span>
               <p className="mt-1 text-2xl font-bold font-mono text-blue-400 print:text-blue-800">
-                {selectedAnalysis.speaker_similarity_score !== undefined
+                {selectedAnalysis.speaker_similarity_score != null
                   ? `${selectedAnalysis.speaker_similarity_score}%`
                   : 'N/A'}
               </p>

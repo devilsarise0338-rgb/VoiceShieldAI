@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { aiDetectionService } from '../services/aiDetectionService';
+import { liveDetectionWs } from '../services/websocketService';
 import { useAuth } from './AuthContext';
 import {
   AudioAnalysis,
@@ -395,36 +397,55 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const { user } = useAuth();
   const [analyses, setAnalyses] = useState<AudioAnalysis[]>(() => {
     const saved = localStorage.getItem('voiceshield_analyses');
-    return saved ? JSON.parse(saved) : SEED_ANALYSES;
+    if (saved) {
+      try { return JSON.parse(saved); } catch { return []; }
+    }
+    return [];
   });
 
   const [speakerProfiles, setSpeakerProfiles] = useState<SpeakerProfile[]>(() => {
     const saved = localStorage.getItem('voiceshield_speakers');
-    return saved ? JSON.parse(saved) : SEED_SPEAKER_PROFILES;
+    if (saved) {
+      try { return JSON.parse(saved); } catch { return []; }
+    }
+    return [];
   });
 
   const [alerts, setAlerts] = useState<Alert[]>(() => {
     const saved = localStorage.getItem('voiceshield_alerts');
-    return saved ? JSON.parse(saved) : SEED_ALERTS;
+    if (saved) {
+      try { return JSON.parse(saved); } catch { return []; }
+    }
+    return [];
   });
 
   const [investigations, setInvestigations] = useState<Investigation[]>(() => {
     const saved = localStorage.getItem('voiceshield_investigations');
-    return saved ? JSON.parse(saved) : SEED_INVESTIGATIONS;
+    if (saved) {
+      try { return JSON.parse(saved); } catch { return []; }
+    }
+    return [];
   });
 
   const [reports, setReports] = useState<SecurityReport[]>(() => {
     const saved = localStorage.getItem('voiceshield_reports');
-    return saved ? JSON.parse(saved) : SEED_REPORTS;
+    if (saved) {
+      try { return JSON.parse(saved); } catch { return []; }
+    }
+    return [];
   });
 
   const [backendConfig, setBackendConfig] = useState<BackendSystemConfig>(() => {
+    const backendUrl = (import.meta.env.VITE_AI_BACKEND_URL || 'http://localhost:8000').replace(/\/+$/, '');
+    const backendWsUrl = import.meta.env.VITE_AI_BACKEND_WS_URL || 'ws://localhost:8000/ws/v1/live-detection';
     return {
-      backendUrl: import.meta.env.VITE_AI_BACKEND_URL || 'http://localhost:8000',
-      backendWsUrl: import.meta.env.VITE_AI_BACKEND_WS_URL || 'ws://localhost:8000/ws/v1/live-detection',
-      demoMode: import.meta.env.VITE_ENABLE_DEMO_MODE !== 'false',
+      backendUrl,
+      backendWsUrl,
+      aiBackendRestUrl: backendUrl,
+      aiBackendWsUrl: backendWsUrl,
+      demoMode: import.meta.env.VITE_ENABLE_DEMO_MODE === 'true',
       sensitivityThreshold: 75,
-      selectedModel: 'VoiceShield-RawNet3-v2.4',
+      selectedModel: 'AASIST / ASVspoof2019-LA',
       isSupabaseConnected: isSupabaseConfigured,
     };
   });
@@ -465,11 +486,15 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           client.from('reports').select('*').order('created_at', { ascending: false }),
         ]);
 
-        if (anaRes.data && anaRes.data.length > 0) setAnalyses(anaRes.data as AudioAnalysis[]);
-        if (spkRes.data && spkRes.data.length > 0) setSpeakerProfiles(spkRes.data as SpeakerProfile[]);
-        if (altRes.data && altRes.data.length > 0) setAlerts(altRes.data as Alert[]);
-        if (invRes.data && invRes.data.length > 0) setInvestigations(invRes.data as Investigation[]);
-        if (repRes.data && repRes.data.length > 0) setReports(repRes.data as SecurityReport[]);
+        const errors = [anaRes.error, spkRes.error, altRes.error, invRes.error, repRes.error].filter(Boolean);
+        if (errors.length) {
+          console.warn('Supabase data sync returned errors; preserving local state.', errors);
+        }
+        if (anaRes.data) setAnalyses(anaRes.data as AudioAnalysis[]);
+        if (spkRes.data) setSpeakerProfiles(spkRes.data as SpeakerProfile[]);
+        if (altRes.data) setAlerts(altRes.data as Alert[]);
+        if (invRes.data) setInvestigations(invRes.data as Investigation[]);
+        if (repRes.data) setReports(repRes.data as SecurityReport[]);
       } catch (err) {
         console.warn('Error syncing with remote Supabase, using local state.', err);
       }
@@ -491,7 +516,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // Automatically trigger an Alert if analysis detected high or critical risk!
     if (analysis.risk_level === 'high' || analysis.risk_level === 'critical') {
       const newAlert: Alert = {
-        id: 'alt_' + Math.random().toString(36).substring(2, 9),
+        id: crypto.randomUUID(),
         user_id: user?.id || 'usr_current',
         analysis_id: analysis.id,
         severity: analysis.risk_level === 'critical' ? 'critical' : 'high',
@@ -499,7 +524,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         description: `Voice clone anomaly detected in ${analysis.source_type.replace('_', ' ')}. ${analysis.explanation}`,
         status: 'new',
         source_type: analysis.source_type,
-        target_identity: analysis.speaker_name,
+        target_identity: analysis.speaker_name ?? undefined,
         spoof_probability: analysis.spoof_risk_score,
         created_at: new Date().toISOString(),
       };
@@ -508,7 +533,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (isSupabaseConfigured && supabase && user) {
       try {
-        await supabase.from('audio_analyses').insert([
+        const { error } = await supabase.from('audio_analyses').insert([
           {
             id: analysis.id,
             user_id: user.id,
@@ -527,8 +552,11 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             spectral_artifacts: analysis.spectral_artifacts,
             explanation: analysis.explanation,
             is_demo: analysis.is_demo,
+            created_at: analysis.created_at,
+            completed_at: analysis.completed_at ?? null,
           },
         ]);
+        if (error) throw error;
       } catch (e) {
         console.warn('Supabase insert audio_analyses failed', e);
       }
@@ -540,7 +568,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   ): Promise<SpeakerProfile> => {
     const newProfile: SpeakerProfile = {
       ...profileData,
-      id: 'spk_' + Math.random().toString(36).substring(2, 9),
+      id: crypto.randomUUID(),
       total_verifications: 0,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
@@ -550,7 +578,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
     if (isSupabaseConfigured && supabase && user) {
       try {
-        await supabase.from('speaker_profiles').insert([
+        const { error } = await supabase.from('speaker_profiles').insert([
           {
             id: newProfile.id,
             user_id: user.id,
@@ -565,6 +593,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
             notes: newProfile.notes,
           },
         ]);
+        if (error) throw error;
       } catch (e) {
         console.warn('Supabase insert speaker_profiles failed', e);
       }
@@ -605,7 +634,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   ): Promise<Investigation> => {
     const newInv: Investigation = {
       ...invData,
-      id: 'inv_' + Math.random().toString(36).substring(2, 9),
+      id: crypto.randomUUID(),
       timeline_events: [
         {
           id: 'evt_' + Math.random().toString(36).substring(2, 7),
@@ -638,7 +667,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   const addInvestigationNote = async (invId: string, content: string, authorName?: string) => {
     const newNote = {
-      id: 'not_' + Math.random().toString(36).substring(2, 9),
+      id: crypto.randomUUID(),
       investigation_id: invId,
       user_id: user?.id || 'usr_current',
       author_name: authorName || user?.full_name || 'Dr. Kabir Sharma',
@@ -689,7 +718,7 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   ): Promise<SecurityReport> => {
     const analysis = analyses.find((a) => a.id === analysisId) || analyses[0];
     const newReport: SecurityReport = {
-      id: 'rep_' + Math.random().toString(36).substring(2, 9),
+      id: crypto.randomUUID(),
       user_id: user?.id || 'usr_current',
       analysis_id: analysis?.id,
       report_title: title || `Forensic Voice Biometrics Audit: ${analysis?.file_name || 'Stream Intercept'}`,
@@ -708,7 +737,27 @@ export const DataProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const updateBackendConfig = (updates: Partial<BackendSystemConfig>) => {
-    setBackendConfig((prev) => ({ ...prev, ...updates }));
+    setBackendConfig((prev) => {
+      const next = { ...prev, ...updates };
+      const restUrl = (next.aiBackendRestUrl || next.backendUrl).replace(/\/+$/, '');
+      const wsUrl = next.aiBackendWsUrl || next.backendWsUrl;
+      next.backendUrl = restUrl;
+      next.aiBackendRestUrl = restUrl;
+      next.backendWsUrl = wsUrl;
+      next.aiBackendWsUrl = wsUrl;
+      next.selectedModel = 'AASIST / ASVspoof2019-LA';
+      try {
+        aiDetectionService.setBackendUrl(restUrl);
+        aiDetectionService.setDemoMode(next.demoMode);
+        liveDetectionWs.setWsUrl(wsUrl);
+        liveDetectionWs.setDemoMode(next.demoMode);
+      } catch (error) {
+        console.error('Invalid backend configuration update:', error);
+        window.alert(error instanceof Error ? error.message : 'Invalid backend URL.');
+        return prev;
+      }
+      return next;
+    });
   };
 
   const resetToDemoSeed = () => {

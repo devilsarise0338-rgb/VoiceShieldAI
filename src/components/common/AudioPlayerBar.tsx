@@ -27,6 +27,8 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
       return () => URL.revokeObjectURL(url);
     } else if (audioUrl) {
       setSrcUrl(audioUrl);
+    } else {
+      setSrcUrl('');
     }
   }, [audioBlob, audioUrl]);
 
@@ -72,7 +74,7 @@ export const AudioPlayerBar: React.FC<AudioPlayerBarProps> = ({
     <div className="flex items-center gap-3 rounded-xl border border-slate-800/80 bg-slate-900/60 p-3 backdrop-blur-sm shadow-sm">
       <audio
         ref={audioRef}
-        src={srcUrl}
+        src={srcUrl || undefined}
         onTimeUpdate={handleTimeUpdate}
         onEnded={handleEnded}
         onLoadedMetadata={handleTimeUpdate}
