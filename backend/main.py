@@ -267,36 +267,21 @@ async def submit_audio_analysis(
     num_windows = int(inf["num_windows"])
     spoof_max = float(inf["spoof_probability_max"])
 
-    # Frontend expects 3 artifacts. AASIST is global — we derive per-feature display from the
-    # real global spoof probability so UI keeps working, without faking a per-band detector.
-    # If frontend needs true per-band scores, that would be a schema mismatch to discuss.
-    # Here: score = spoof_pct, status = anomaly if > thresholds.
-    def _artifact(name: str, desc: str) -> SpectralArtifact:
-        status = "anomaly_detected" if spoof_p > 0.65 else ("anomaly_detected" if spoof_p > 0.30 and "LPC" in name else "normal")
-        # Use real spoof_pct for all, but keep ordering subtle (not random)
-        score_val = spoof_score if status == "anomaly_detected" else max(5.0, 100 - spoof_score - 10)
-        # Clamp
-        score_val = max(0.0, min(100.0, round(score_val, 1)))
-        return SpectralArtifact(name=name, score=score_val, status=status, description=desc)
-
+    # AASIST exposes one integrated spoof probability, not three independently
+    # calibrated per-branch detectors. Return one honest global diagnostic rather
+    # than duplicating the score and presenting it as spectral/temporal attribution.
+    artifact_status = "anomaly_detected" if spoof_p >= 0.30 else "normal"
     artifacts = [
-        _artifact(
-            "AASIST Spectral Graph Attention",
-            "Global anti-spoof score from spectral branch of AASIST (graph attention over Sinc-conv features).",
-        ),
-        _artifact(
-            "AASIST Temporal Graph Attention",
-            "Global score from temporal branch; high value indicates vocoder phase/periodic artifacts.",
-        ),
-        _artifact(
-            "Heterogeneous Spectro-Temporal Fusion",
-            "Fusion score (HS-GAT). Sensitive to sub-band inconsistencies typical of neural vocoders.",
-        ),
+        SpectralArtifact(
+            name="AASIST Integrated Anti-Spoof Score",
+            score=spoof_score,
+            status=artifact_status,
+            description=(
+                "Single integrated AASIST probability derived from the model's spectro-temporal graph "
+                "representation. This is not a speaker-similarity score or an independent branch metric."
+            ),
+        )
     ]
-
-    # Mismatch note (for STEP 4 docs): frontend's per-artifact breakdown is not provided by AASIST
-    # as three independent detectors. We map the single real spoof probability to three displays
-    # so existing UI renders without breaking. True per-band attribution would require a different model.
 
     # Speaker similarity: AASIST does NOT do speaker ID — do not randomize. Return None.
     speaker_similarity = None

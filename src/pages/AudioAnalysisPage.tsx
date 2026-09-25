@@ -391,7 +391,7 @@ export const AudioAnalysisPage: React.FC = () => {
           {/* Spectral Artifacts Breakdown */}
           <div>
             <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">
-              Spectral Anti-Spoofing Diagnostics
+              AASIST Anti-Spoofing Diagnostic
             </h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {analysisResult.spectral_artifacts?.map((art, idx) => (

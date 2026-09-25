@@ -179,13 +179,13 @@ export const ReportsPage: React.FC = () => {
           {/* Spectral Telemetry Breakdown Table */}
           <div>
             <h4 className="text-xs font-semibold text-slate-200 print:text-black uppercase tracking-wider mb-3">
-              2. Spectral Micro-Feature Decomposition
+              2. Integrated AASIST Anti-Spoof Diagnostic
             </h4>
             <div className="overflow-x-auto rounded-xl border border-slate-800/80 print:border-slate-300">
               <table className="w-full text-left text-xs">
                 <thead className="border-b border-slate-800/80 bg-slate-900/60 print:bg-slate-200 print:border-slate-300 text-slate-400 text-[11px] uppercase tracking-wider">
                   <tr>
-                    <th className="p-3">Feature Component</th>
+                    <th className="p-3">Diagnostic</th>
                     <th className="p-3">Artifact Status</th>
                     <th className="p-3">Anomaly Metric</th>
                     <th className="p-3">Diagnostic Finding</th>
