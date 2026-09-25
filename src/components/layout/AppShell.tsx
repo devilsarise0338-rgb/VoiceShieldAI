@@ -45,7 +45,7 @@ export const AppShell: React.FC = () => {
           </button>
           <span className="font-semibold text-sm">VoiceShield</span>
         </header>
-        <main className="flex-1 overflow-y-auto bg-background">
+        <main className="flex-1 overflow-y-auto bg-background text-foreground">
           <Outlet />
         </main>
       </div>

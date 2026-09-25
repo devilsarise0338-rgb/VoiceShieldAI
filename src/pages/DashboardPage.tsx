@@ -1,72 +1,70 @@
 import React from 'react';
-import {
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  TableRow,
-  TableCell,
-} from '@tremor/react';
-
-const recentCalls = [
-  { id: 'CAL-9421', caller: 'John Doe', timestamp: '2026-09-23 14:32:01', score: 98.4, risk: 'HIGH', action: 'Blocked' },
-  { id: 'CAL-9420', caller: 'Jane Smith', timestamp: '2026-09-23 14:28:45', score: 1.2, risk: 'LOW', action: 'Allowed' },
-  { id: 'CAL-9419', caller: 'Unknown', timestamp: '2026-09-23 14:15:22', score: 45.6, risk: 'MEDIUM', action: 'Flagged' },
-];
+import { Activity, ShieldAlert, ShieldCheck, Clock } from 'lucide-react';
+import { useData } from '../context/DataContext';
+import { RiskBadge } from '../components/common/RiskBadge';
 
 export const DashboardPage = () => {
+  const { analyses, isSupabaseConnected } = useData();
+  const highRisk = analyses.filter((a) => a.result_label === 'synthetic_clone' || a.result_label === 'suspicious').length;
+  const authentic = analyses.filter((a) => a.result_label === 'authentic').length;
+  const averageLatency = analyses.length
+    ? Math.round(analyses.reduce((sum, a) => sum + (a.processing_time_ms ?? 0), 0) / analyses.length)
+    : 0;
+
+  const cards = [
+    { label: 'Real analyses', value: analyses.length, icon: Activity, color: 'text-blue-400' },
+    { label: 'Likely synthetic', value: highRisk, icon: ShieldAlert, color: 'text-rose-400' },
+    { label: 'Authentic results', value: authentic, icon: ShieldCheck, color: 'text-emerald-400' },
+    { label: 'Average CPU latency', value: `${averageLatency} ms`, icon: Clock, color: 'text-amber-400' },
+  ];
+
   return (
-    <div className="flex flex-col min-h-full">
-      <div className="px-8 py-6 border-b border-border bg-card">
-        <h1 className="text-xl font-semibold text-foreground tracking-tight">Dashboard</h1>
-        <div className="flex items-center gap-1.5 mt-1 text-sm text-muted-foreground font-mono">
-          <span>console</span>
-          <span>/</span>
-          <span>dashboard</span>
-        </div>
+    <div className="space-y-6 p-6 lg:p-8">
+      <div className="border-b border-border pb-4">
+        <h1 className="text-xl font-semibold text-foreground">Real Analysis Dashboard</h1>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Values come from completed analyses in this browser session{isSupabaseConnected ? ' and Supabase when authenticated' : ''}.
+        </p>
       </div>
 
-      <div className="p-8 space-y-6 max-w-[1200px]">
-        {/* Simplified table view to match new style */}
-        <div className="bg-card border border-border rounded-sm">
-          <div className="px-6 py-4 border-b border-border">
-            <h2 className="text-sm font-semibold text-foreground">Recent Activity</h2>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {cards.map(({ label, value, icon: Icon, color }) => (
+          <div key={label} className="rounded-lg border border-border bg-card p-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">{label}</span>
+              <Icon className={`h-4 w-4 ${color}`} />
+            </div>
+            <p className={`mt-3 text-2xl font-semibold font-mono ${color}`}>{value}</p>
           </div>
-          <Table className="mt-0">
-            <TableHead>
-              <TableRow className="border-b border-border">
-                <TableHeaderCell className="text-muted-foreground text-xs font-medium">Call ID</TableHeaderCell>
-                <TableHeaderCell className="text-muted-foreground text-xs font-medium">Caller</TableHeaderCell>
-                <TableHeaderCell className="text-muted-foreground text-xs font-medium text-right">Timestamp</TableHeaderCell>
-                <TableHeaderCell className="text-muted-foreground text-xs font-medium text-right">Score</TableHeaderCell>
-                <TableHeaderCell className="text-muted-foreground text-xs font-medium">Risk Level</TableHeaderCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {recentCalls.map((item) => (
-                <TableRow key={item.id} className="hover:bg-muted/30 border-b border-border last:border-none transition-colors">
-                  <TableCell className="text-sm font-mono">{item.id}</TableCell>
-                  <TableCell className="text-sm">{item.caller}</TableCell>
-                  <TableCell className="text-sm font-mono text-right text-muted-foreground">{item.timestamp}</TableCell>
-                  <TableCell className="text-sm font-mono text-right">
-                    <span className={item.score > 90 ? 'text-destructive' : item.score > 40 ? 'text-warning' : 'text-accent'}>
-                      {item.score.toFixed(1)}%
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <span className={`px-2 py-0.5 text-[10px] font-semibold border rounded-sm ${
-                      item.risk === 'HIGH' ? 'bg-destructive/10 text-destructive border-destructive/20' : 
-                      item.risk === 'MEDIUM' ? 'bg-warning/10 text-warning border-warning/20' : 
-                      'bg-accent/10 text-accent border-accent/20'
-                    }`}>
-                      {item.risk}
-                    </span>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+        ))}
+      </div>
+
+      <div className="rounded-lg border border-border bg-card">
+        <div className="border-b border-border px-5 py-4">
+          <h2 className="text-sm font-semibold text-foreground">Recent Real Results</h2>
         </div>
+        {analyses.length === 0 ? (
+          <p className="px-5 py-10 text-center text-sm text-muted-foreground">
+            No analyses yet. Upload a real audio file from Analyze.
+          </p>
+        ) : (
+          <div className="divide-y divide-border">
+            {analyses.slice(0, 8).map((analysis) => (
+              <div key={analysis.id} className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-foreground">{analysis.file_name || 'Unnamed audio'}</p>
+                  <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                    {new Date(analysis.created_at).toLocaleString()} · {analysis.processing_time_ms ?? 0} ms
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="font-mono text-sm text-foreground">{analysis.spoof_risk_score}% spoof risk</span>
+                  <RiskBadge level={analysis.risk_level} resultLabel={analysis.result_label} />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
