@@ -79,7 +79,7 @@ def test_analyses_valid_clip():
         assert "AASIST" in j["model_version"]
         assert 0 <= j["spoof_risk_score"] <= 100
         assert j["result_label"] in ["authentic", "suspicious", "synthetic_clone", "inconclusive"]
-        assert j["risk_level"] in ["safe", "low", "medium", "high", "critical"]
+        assert j["risk_level"] in ["low", "medium", "high"]
         assert j["processing_time_ms"] is not None
         assert j["status"] == "completed"
 

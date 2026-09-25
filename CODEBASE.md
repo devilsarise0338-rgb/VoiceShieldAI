@@ -3437,7 +3437,7 @@ def map_risk(spoof_prob: float) -> dict:
     auth_pct = round(100.0 - p * 100, 1)
 
     if p < low_thr:
-        risk_level = "safe"  # frontend renders as "Authentic / Safe"
+        risk_level = "low"  # canonical API tier; UI still renders authentic/safe language
         result_label = "authentic"
         recommendation = "Proceed with normal caution."
         explanation = (
@@ -3464,11 +3464,8 @@ def map_risk(spoof_prob: float) -> dict:
             f"[Uncalibrated]"
         )
 
-    # Map to frontend's critical/high/medium naming:
-    # frontend's RiskBadge treats 'critical' as synthetic_clone too; we keep 'high' as top tier
-    # to preserve existing UI, but allow 'critical' if caller wants stricter display.
-    # Here we keep risk_level in {safe, medium, high} to match the GOAL prompt exactly.
-    # If you need 'critical' vs 'high', raise high threshold split externally.
+    # Keep API tiers in the requested {low, medium, high} contract. The UI's
+    # RiskBadge may still use its display label based on result_label.
 
     return {
         "risk_level": risk_level,
@@ -3637,7 +3634,7 @@ def test_analyses_valid_clip():
         assert "AASIST" in j["model_version"]
         assert 0 <= j["spoof_risk_score"] <= 100
         assert j["result_label"] in ["authentic", "suspicious", "synthetic_clone", "inconclusive"]
-        assert j["risk_level"] in ["safe", "low", "medium", "high", "critical"]
+        assert j["risk_level"] in ["low", "medium", "high"]
         assert j["processing_time_ms"] is not None
         assert j["status"] == "completed"
 
