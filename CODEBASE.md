@@ -2499,6 +2499,7 @@ VITE_ENABLE_DEMO_MODE="false"
 node_modules/
 build/
 dist/
+test_samples/
 coverage/
 .DS_Store
 *.log
@@ -2524,6 +2525,10 @@ REALITY_DEFENDER_API_KEY=""
 
 # Hugging Face Access Token (Gated AI weights & audio model pipelines)
 HF_TOKEN=""
+
+# Optional explicit FFmpeg path. If omitted, the backend checks PATH and the
+# standard WinGet Gyan.FFmpeg installation directory.
+# FFMPEG_BINARY="C:/path/to/ffmpeg.exe"
 
 # Browser origins allowed to call this API (comma-separated exact origins)
 CORS_ALLOWED_ORIGINS="http://localhost:3000,http://127.0.0.1:3000"
@@ -2569,7 +2574,11 @@ STEP-1 VERIFICATION — class indices & preprocessing (do NOT assume):
   - eval expects mono, 16kHz, float32 Tensor of exactly 64600 samples.
 """
 
+import io
 import json
+import os
+import shutil
+import subprocess
 import time
 import tempfile
 import pathlib
@@ -2706,6 +2715,75 @@ def get_model_info() -> Dict:
         "params": sum(p.numel() for p in _MODEL.parameters()),
     }
 
+def _find_ffmpeg() -> Optional[str]:
+    """Locate ffmpeg without relying solely on the current process PATH."""
+    configured = os.getenv("FFMPEG_BINARY", "").strip()
+    if configured and pathlib.Path(configured).is_file():
+        return configured
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    # winget portable installs may expose only a command alias, or may keep
+    # the executable inside the package directory. Support both layouts so a
+    # long-running backend does not depend on a refreshed process PATH.
+    local_app_data = pathlib.Path(os.getenv("LOCALAPPDATA", ""))
+    winget_root = local_app_data / "Microsoft" / "WinGet"
+    alias_candidate = winget_root / "Links" / "ffmpeg.exe"
+    if alias_candidate.is_file():
+        return str(alias_candidate)
+    package_root = winget_root / "Packages"
+    if package_root.is_dir():
+        for candidate in package_root.glob("Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe"):
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
+def _decode_m4a_with_ffmpeg(source_path: pathlib.Path) -> Tuple[np.ndarray, int]:
+    """Decode AAC/M4A through ffmpeg stdout and return mono float32 audio.
+
+    This path is intentionally isolated to M4A. Existing WAV, FLAC, MP3, and
+    OGG decoding behavior is unchanged.
+    """
+    ffmpeg = _find_ffmpeg()
+    if not ffmpeg:
+        raise ValueError(
+            "FFmpeg is required to decode M4A/AAC. Install Gyan.FFmpeg and restart the backend."
+        )
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-i",
+        str(source_path),
+        "-map",
+        "0:a:0",
+        "-ac",
+        "1",
+        "-ar",
+        str(_SAMPLE_RATE),
+        "-f",
+        "wav",
+        "pipe:1",
+    ]
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=45,
+        check=False,
+    )
+    if completed.returncode != 0 or not completed.stdout:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"FFmpeg could not decode M4A/AAC: {detail or 'unknown error'}")
+    data, sr = sf.read(io.BytesIO(completed.stdout), dtype="float32", always_2d=False)
+    if data.size == 0:
+        raise ValueError("FFmpeg returned no audio samples for the M4A/AAC file.")
+    return data, int(sr)
+
+
 def _decode_audio(file_bytes: bytes, filename: str = "audio.wav") -> Tuple[np.ndarray, int]:
     """
     Decode bytes to (waveform mono float32 @ native sr, sr).
@@ -2723,13 +2801,18 @@ def _decode_audio(file_bytes: bytes, filename: str = "audio.wav") -> Tuple[np.nd
         with tempfile.NamedTemporaryFile(suffix=suffix or ".wav", delete=False) as tmp:
             tmp.write(file_bytes)
             tmp_path = pathlib.Path(tmp.name)
-        # First try soundfile (covers wav/flac/ogg)
+        # M4A is AAC in an MP4 container, which libsndfile does not decode.
+        # Keep this fallback isolated so WAV/FLAC/MP3/OGG behavior is untouched.
+        if suffix == ".m4a":
+            return _decode_m4a_with_ffmpeg(tmp_path)
+
+        # First try soundfile (covers wav/flac/ogg and other supported formats)
         try:
             data, sr = sf.read(str(tmp_path), dtype="float32", always_2d=False)
             # sf.read returns (samples,) for mono, (samples, ch) for multi
             return data, sr
         except Exception as e_sf:
-            # Fallback to torchaudio for mp3/m4a/others that need ffmpeg
+            # Preserve the existing torchaudio fallback for non-M4A formats.
             try:
                 import torchaudio
                 waveform, sr = torchaudio.load(str(tmp_path))  # (ch, samples)
@@ -2740,10 +2823,10 @@ def _decode_audio(file_bytes: bytes, filename: str = "audio.wav") -> Tuple[np.nd
                     waveform = waveform.squeeze(0)
                 return waveform.numpy().astype(np.float32), sr
             except Exception as e_ta:
-                # Surface ffmpeg hint for mp3/m4a
+                # Surface ffmpeg hint for formats that may require it
                 msg = str(e_ta)
                 hint = ""
-                if suffix in {".mp3", ".m4a", ".mp4", ".aac", ".wma"}:
+                if suffix in {".mp3", ".mp4", ".aac", ".wma"}:
                     hint = (
                         " This container needs FFmpeg on Windows. Install via: "
                         "winget install Gyan.FFmpeg  (or) choco install ffmpeg  (or) scoop install ffmpeg ; "
@@ -3098,12 +3181,14 @@ async def submit_audio_analysis(
     try:
         async with _INFERENCE_SEMAPHORE:
             inf = await run_in_threadpool(aasist_infer, contents, safe_name)
-    except ValueError:
+    except ValueError as exc:
         # Return an actionable message while keeping decoder internals out of HTTP responses.
-        raise HTTPException(
-            status_code=400,
-            detail="The selected file is not valid or decodable audio. Try WAV, FLAC, MP3, OGG, or M4A.",
-        )
+        message = str(exc)
+        if "FFmpeg" in message or "M4A" in message or "AAC" in message:
+            detail = "M4A/AAC decoding requires FFmpeg on the backend. Install it and restart the backend."
+        else:
+            detail = "The selected file is not valid or decodable audio. Try WAV, FLAC, MP3, OGG, or M4A."
+        raise HTTPException(status_code=400, detail=detail) from exc
     except Exception as exc:
         # Never leak internals over HTTP, but retain the full traceback in server logs.
         import traceback
@@ -3363,8 +3448,11 @@ numpy==2.4.4
 # torch/torchaudio CPU are not pinned here because they need --index-url; install via:
 #   pip install torch==2.14.0+cpu torchaudio==2.11.0+cpu --index-url https://download.pytorch.org/whl/cpu
 # For exact reproducibility on this host: torch==2.14.0+cpu, torchaudio==2.11.0+cpu
-# Optional: ffmpeg for mp3/m4a on Windows
-#   winget install Gyan.FFmpeg  (verify: ffmpeg -version)
+# Required at runtime for M4A/AAC uploads on systems where libsndfile does
+# not support the container (including this Windows host):
+#   winget install --id Gyan.FFmpeg --exact
+# Restart FastAPI after installation. Optional override:
+#   FFMPEG_BINARY=C:/absolute/path/to/ffmpeg.exe
 ````
 
 ### 49. `backend/risk_engine.py`
@@ -3637,6 +3725,36 @@ def test_analyses_valid_clip():
         assert j["risk_level"] in ["low", "medium", "high"]
         assert j["processing_time_ms"] is not None
         assert j["status"] == "completed"
+
+def test_m4a_uses_ffmpeg_fallback(monkeypatch, tmp_path):
+    # Use a real WAV as fake ffmpeg stdout. This isolates and verifies the
+    # M4A branch without requiring a binary AAC fixture in the repository.
+    source_wav = tmp_path / "source.wav"
+    _make_wav(source_wav, duration=2.0)
+    source_bytes = source_wav.read_bytes()
+    captured = {}
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = source_bytes
+        stderr = b""
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return FakeCompleted()
+
+    monkeypatch.setattr("inference._find_ffmpeg", lambda: "ffmpeg.exe")
+    monkeypatch.setattr("inference.subprocess.run", fake_run)
+    from inference import _decode_audio
+
+    data, sr = _decode_audio(b"not-really-m4a-but-routed-by-filename", "Recording.m4a")
+    assert sr == 16000
+    assert len(data) == 32000
+    assert captured["command"][0] == "ffmpeg.exe"
+    assert "-i" in captured["command"]
+    assert captured["command"][-1] == "pipe:1"
+
 
 def test_analyses_corrupted_rejected():
     r = client.post("/api/v1/analyses", files={"file": ("bad.wav", b"not audio at all", "audio/wav")}, data={"source_type": "audio_upload"})

@@ -235,12 +235,14 @@ async def submit_audio_analysis(
     try:
         async with _INFERENCE_SEMAPHORE:
             inf = await run_in_threadpool(aasist_infer, contents, safe_name)
-    except ValueError:
+    except ValueError as exc:
         # Return an actionable message while keeping decoder internals out of HTTP responses.
-        raise HTTPException(
-            status_code=400,
-            detail="The selected file is not valid or decodable audio. Try WAV, FLAC, MP3, OGG, or M4A.",
-        )
+        message = str(exc)
+        if "FFmpeg" in message or "M4A" in message or "AAC" in message:
+            detail = "M4A/AAC decoding requires FFmpeg on the backend. Install it and restart the backend."
+        else:
+            detail = "The selected file is not valid or decodable audio. Try WAV, FLAC, MP3, OGG, or M4A."
+        raise HTTPException(status_code=400, detail=detail) from exc
     except Exception as exc:
         # Never leak internals over HTTP, but retain the full traceback in server logs.
         import traceback

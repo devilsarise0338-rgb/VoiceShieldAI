@@ -17,5 +17,8 @@ numpy==2.4.4
 # torch/torchaudio CPU are not pinned here because they need --index-url; install via:
 #   pip install torch==2.14.0+cpu torchaudio==2.11.0+cpu --index-url https://download.pytorch.org/whl/cpu
 # For exact reproducibility on this host: torch==2.14.0+cpu, torchaudio==2.11.0+cpu
-# Optional: ffmpeg for mp3/m4a on Windows
-#   winget install Gyan.FFmpeg  (verify: ffmpeg -version)
+# Required at runtime for M4A/AAC uploads on systems where libsndfile does
+# not support the container (including this Windows host):
+#   winget install --id Gyan.FFmpeg --exact
+# Restart FastAPI after installation. Optional override:
+#   FFMPEG_BINARY=C:/absolute/path/to/ffmpeg.exe

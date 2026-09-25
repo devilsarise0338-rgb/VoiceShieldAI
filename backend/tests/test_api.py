@@ -83,6 +83,36 @@ def test_analyses_valid_clip():
         assert j["processing_time_ms"] is not None
         assert j["status"] == "completed"
 
+def test_m4a_uses_ffmpeg_fallback(monkeypatch, tmp_path):
+    # Use a real WAV as fake ffmpeg stdout. This isolates and verifies the
+    # M4A branch without requiring a binary AAC fixture in the repository.
+    source_wav = tmp_path / "source.wav"
+    _make_wav(source_wav, duration=2.0)
+    source_bytes = source_wav.read_bytes()
+    captured = {}
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = source_bytes
+        stderr = b""
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return FakeCompleted()
+
+    monkeypatch.setattr("inference._find_ffmpeg", lambda: "ffmpeg.exe")
+    monkeypatch.setattr("inference.subprocess.run", fake_run)
+    from inference import _decode_audio
+
+    data, sr = _decode_audio(b"not-really-m4a-but-routed-by-filename", "Recording.m4a")
+    assert sr == 16000
+    assert len(data) == 32000
+    assert captured["command"][0] == "ffmpeg.exe"
+    assert "-i" in captured["command"]
+    assert captured["command"][-1] == "pipe:1"
+
+
 def test_analyses_corrupted_rejected():
     r = client.post("/api/v1/analyses", files={"file": ("bad.wav", b"not audio at all", "audio/wav")}, data={"source_type": "audio_upload"})
     assert r.status_code == 400, r.text

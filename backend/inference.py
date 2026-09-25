@@ -31,7 +31,11 @@ STEP-1 VERIFICATION — class indices & preprocessing (do NOT assume):
   - eval expects mono, 16kHz, float32 Tensor of exactly 64600 samples.
 """
 
+import io
 import json
+import os
+import shutil
+import subprocess
 import time
 import tempfile
 import pathlib
@@ -168,6 +172,75 @@ def get_model_info() -> Dict:
         "params": sum(p.numel() for p in _MODEL.parameters()),
     }
 
+def _find_ffmpeg() -> Optional[str]:
+    """Locate ffmpeg without relying solely on the current process PATH."""
+    configured = os.getenv("FFMPEG_BINARY", "").strip()
+    if configured and pathlib.Path(configured).is_file():
+        return configured
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    # winget portable installs may expose only a command alias, or may keep
+    # the executable inside the package directory. Support both layouts so a
+    # long-running backend does not depend on a refreshed process PATH.
+    local_app_data = pathlib.Path(os.getenv("LOCALAPPDATA", ""))
+    winget_root = local_app_data / "Microsoft" / "WinGet"
+    alias_candidate = winget_root / "Links" / "ffmpeg.exe"
+    if alias_candidate.is_file():
+        return str(alias_candidate)
+    package_root = winget_root / "Packages"
+    if package_root.is_dir():
+        for candidate in package_root.glob("Gyan.FFmpeg_*/ffmpeg-*/bin/ffmpeg.exe"):
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
+def _decode_m4a_with_ffmpeg(source_path: pathlib.Path) -> Tuple[np.ndarray, int]:
+    """Decode AAC/M4A through ffmpeg stdout and return mono float32 audio.
+
+    This path is intentionally isolated to M4A. Existing WAV, FLAC, MP3, and
+    OGG decoding behavior is unchanged.
+    """
+    ffmpeg = _find_ffmpeg()
+    if not ffmpeg:
+        raise ValueError(
+            "FFmpeg is required to decode M4A/AAC. Install Gyan.FFmpeg and restart the backend."
+        )
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-nostdin",
+        "-i",
+        str(source_path),
+        "-map",
+        "0:a:0",
+        "-ac",
+        "1",
+        "-ar",
+        str(_SAMPLE_RATE),
+        "-f",
+        "wav",
+        "pipe:1",
+    ]
+    completed = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=45,
+        check=False,
+    )
+    if completed.returncode != 0 or not completed.stdout:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise ValueError(f"FFmpeg could not decode M4A/AAC: {detail or 'unknown error'}")
+    data, sr = sf.read(io.BytesIO(completed.stdout), dtype="float32", always_2d=False)
+    if data.size == 0:
+        raise ValueError("FFmpeg returned no audio samples for the M4A/AAC file.")
+    return data, int(sr)
+
+
 def _decode_audio(file_bytes: bytes, filename: str = "audio.wav") -> Tuple[np.ndarray, int]:
     """
     Decode bytes to (waveform mono float32 @ native sr, sr).
@@ -185,13 +258,18 @@ def _decode_audio(file_bytes: bytes, filename: str = "audio.wav") -> Tuple[np.nd
         with tempfile.NamedTemporaryFile(suffix=suffix or ".wav", delete=False) as tmp:
             tmp.write(file_bytes)
             tmp_path = pathlib.Path(tmp.name)
-        # First try soundfile (covers wav/flac/ogg)
+        # M4A is AAC in an MP4 container, which libsndfile does not decode.
+        # Keep this fallback isolated so WAV/FLAC/MP3/OGG behavior is untouched.
+        if suffix == ".m4a":
+            return _decode_m4a_with_ffmpeg(tmp_path)
+
+        # First try soundfile (covers wav/flac/ogg and other supported formats)
         try:
             data, sr = sf.read(str(tmp_path), dtype="float32", always_2d=False)
             # sf.read returns (samples,) for mono, (samples, ch) for multi
             return data, sr
         except Exception as e_sf:
-            # Fallback to torchaudio for mp3/m4a/others that need ffmpeg
+            # Preserve the existing torchaudio fallback for non-M4A formats.
             try:
                 import torchaudio
                 waveform, sr = torchaudio.load(str(tmp_path))  # (ch, samples)
@@ -202,10 +280,10 @@ def _decode_audio(file_bytes: bytes, filename: str = "audio.wav") -> Tuple[np.nd
                     waveform = waveform.squeeze(0)
                 return waveform.numpy().astype(np.float32), sr
             except Exception as e_ta:
-                # Surface ffmpeg hint for mp3/m4a
+                # Surface ffmpeg hint for formats that may require it
                 msg = str(e_ta)
                 hint = ""
-                if suffix in {".mp3", ".m4a", ".mp4", ".aac", ".wma"}:
+                if suffix in {".mp3", ".mp4", ".aac", ".wma"}:
                     hint = (
                         " This container needs FFmpeg on Windows. Install via: "
                         "winget install Gyan.FFmpeg  (or) choco install ffmpeg  (or) scoop install ffmpeg ; "
